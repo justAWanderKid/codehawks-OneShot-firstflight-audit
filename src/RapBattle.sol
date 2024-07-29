@@ -17,6 +17,8 @@ contract RapBattle {
     uint256 public defenderBet;
     uint256 public defenderTokenId;
 
+    // [INFO] @audit BASE_SKILL amount should be `50` as it's stated in docs.
+
     uint256 public constant BASE_SKILL = 65; // The starting base skill of a rapper
     uint256 public constant VICE_DECREMENT = 5; // -5 for each vice the rapper has
     uint256 public constant VIRTUE_INCREMENT = 10; // +10 for each virtue the rapper has
@@ -35,6 +37,9 @@ contract RapBattle {
         credToken = ICredToken(_credibilityContract);
     }
 
+
+
+    // [LOW] @audit `_credBet` amount can be `0`, if an battle start's, it does not matter who won the battle, winner will receive nothing.
     function goOnStageOrBattle(uint256 _tokenId, uint256 _credBet) external {
         if (defender == address(0)) {
             defender = msg.sender;
@@ -50,7 +55,12 @@ contract RapBattle {
             _battle(_tokenId, _credBet);
         }
     }
+    
 
+
+    // [HIGH] @audit challenger can start a battle without even having an `Rapper NFT` and `CredToken`. by passing Other Peoples Rapper NFT tokenId that has better stats and just entering the same number as `defenderBet`, if he won, then he will the prize otherwise the transaction will revert. 
+    // [LOW] @audit `defender` and `challenger` can be same address in battle.
+    // [HIGH] @audit if the challenger is an smartContract, he can start a battle, and after he find out he lost the battle, reverts the whole transaction, if he won it, then he will just take the prize.
     function _battle(uint256 _tokenId, uint256 _credBet) internal {
         address _defender = defender;
         require(defenderBet == _credBet, "RapBattle: Bet amounts do not match");
@@ -59,14 +69,19 @@ contract RapBattle {
         uint256 totalBattleSkill = defenderRapperSkill + challengerRapperSkill;
         uint256 totalPrize = defenderBet + _credBet;
 
-        uint256 random =
-            uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, msg.sender))) % totalBattleSkill;
+        // [HIGH] @audit attacker can use weak Randomness to findout if his gonna win the battle or not.
+        uint256 random = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, msg.sender))) % totalBattleSkill;
 
         // Reset the defender
         defender = address(0);
+        // event Battle(address indexed challenger, uint256 tokenId, address indexed winner);
+        
+        // [LOW] @audit emitting wrong event, in event below we determinte the winner with this calculation: `random < defenderRapperSkill` and in if statement below we determine the winner by `random <= defenderRapperSkill`
         emit Battle(msg.sender, _tokenId, random < defenderRapperSkill ? _defender : msg.sender);
 
         // If random <= defenderRapperSkill -> defenderRapperSkill wins, otherwise they lose
+
+        // [LOW] @audit we don't increment the winner of the battle RapperStats `battlesWon` number.
         if (random <= defenderRapperSkill) {
             // We give them the money the defender deposited, and the challenger's bet
             credToken.transfer(_defender, defenderBet);

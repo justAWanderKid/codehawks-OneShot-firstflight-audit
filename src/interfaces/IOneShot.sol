@@ -5,12 +5,12 @@ import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
 interface IOneShot is IERC721 {
     struct RapperStats {
-        bool weakKnees;
-        bool heavyArms;
-        bool spaghettiSweater;
-        bool calmAndReady;
-        uint256 battlesWon;
-    }
+        bool weakKnees;             //  weakKnees = True
+        bool heavyArms;             //  heavyArms = True
+        bool spaghettiSweater;      //  spaghettiSweater = True
+        bool calmAndReady;          //  calmandReady = False
+        uint256 battlesWon;         //  battlesWon = 0
+    }   
 
     // Mint a new rapper token
     function mintRapper() external;
